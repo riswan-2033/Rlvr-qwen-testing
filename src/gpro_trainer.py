@@ -171,10 +171,10 @@ class GproTrainer:
         policy_model_name: str,
         ref_model_name: str,
         config: Dict[str, Any],
-        device: str = "cuda"
-        if torch.cuda.is_available()
-        else "cpu",
+        device: str = "cuda"  # Enforce CUDA-only computation
     ):
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA GPU is required. CPU-only computation is not allowed.")
         self.device = device
         self.config = config
 
@@ -470,9 +470,7 @@ def run_gpro_cycle(
         policy_model_name=cfg["model_name"],
         ref_model_name=cfg.get("ref_model_name", cfg["model_name"]),
         config=cfg,
-        device="cuda"
-        if torch.cuda.is_available()
-        else "cpu",
+        device="cuda",
     )
 
     # Run training

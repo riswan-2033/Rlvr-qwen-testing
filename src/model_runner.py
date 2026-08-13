@@ -5,6 +5,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 class LocalLLMRunner:
     def __init__(self, model_name: str):
         print(f"-> Allocating VRAM and initializing weights for: {model_name}")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA GPU is required. CPU-only computation is not allowed.")
         self.device = "cuda" 
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
