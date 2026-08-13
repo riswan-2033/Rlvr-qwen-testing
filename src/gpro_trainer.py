@@ -2,6 +2,7 @@ import re
 import json
 import os
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -175,28 +176,44 @@ class GproTrainer:
     ):
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA GPU is required. CPU-only computation is not allowed.")
-        self.device = device
+
+        self.num_gpus = torch.cuda.device_count()
+        self.gpu_ids = list(range(self.num_gpus))
+        self.device = f"cuda:{self.gpu_ids[0]}" if self.num_gpus > 0 else "cpu"
+
+        # FP16 on Turing (T4); BF16 requires Ampere or newer.
+        self.compute_dtype = (
+            torch.float16 if not torch.cuda.is_bf16_supported() else torch.bfloat16
+        )
+        print(f"[GPU] Device count: {self.num_gpus} | IDs: {self.gpu_ids} | dtype: {self.compute_dtype}")
+
         self.config = config
 
         # --- Policy model (trainable) ---
         self.policy_tokenizer = AutoTokenizer.from_pretrained(policy_model_name)
         self.policy_model = AutoModelForCausalLM.from_pretrained(
             policy_model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-        ).to(device)
+            torch_dtype=self.compute_dtype,
+        ).to(self.device)
         self.policy_model.train()
 
         # --- Reference model (frozen) ---
         self.ref_tokenizer = AutoTokenizer.from_pretrained(ref_model_name)
         self.ref_model = AutoModelForCausalLM.from_pretrained(
             ref_model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-        ).to(device)
+            torch_dtype=self.compute_dtype,
+        ).to(self.device)
         self.ref_model.eval()
         for p in self.ref_model.parameters():
             p.requires_grad = False
+
+        # --- Replicate training across all GPUs (DataParallel) ---
+        self.policy_generate_model = self.policy_model  # unwrapped model for rollout/gen
+        self.ref_generate_model = self.ref_model
+        if self.num_gpus > 1:
+            print(f"[GPU] Wrapping policy & ref models with DataParallel on {self.gpu_ids}")
+            self.policy_model = nn.DataParallel(self.policy_model, device_ids=self.gpu_ids)
+            self.ref_model = nn.DataParallel(self.ref_model, device_ids=self.gpu_ids)
 
 # --- Optimizer ---
         gpro_lr = float(self.config.get("gpro_lr", 1e-5))
@@ -305,7 +322,7 @@ class GproTrainer:
                     input_ids, skip_special_tokens=True
                 )
                 codes, values, rewards = rollout(
-                    self.policy_model,
+                    self.policy_generate_model,
                     self.policy_tokenizer,
                     prompts,
                     self.config.get("gpro_max_new_tokens", 256),
@@ -376,10 +393,15 @@ class GproTrainer:
             )
             if epoch % checkpoint_interval == 0 or epoch == epochs:
                 ckpt_path = self.checkpoint_dir / f"epoch_{epoch}.pt"
+                policy_state = (
+                    self.policy_model.module.state_dict()
+                    if isinstance(self.policy_model, nn.DataParallel)
+                    else self.policy_model.state_dict()
+                )
                 torch.save(
                     {
                         "epoch": epoch,
-                        "policy_state_dict": self.policy_model.state_dict(),
+                        "policy_state_dict": policy_state,
                         "optimizer_state_dict": self.optimizer.state_dict(),
                         "loss": avg_loss,
                         "config": self.config,
@@ -392,7 +414,7 @@ class GproTrainer:
                 if self.config.get("log_artifacts", True):
                     try:
                         _push_to_hub(
-                            self.policy_model,
+                            self.policy_generate_model,
                             self.policy_tokenizer,
                             self.config.get("experiment_name", "RLVR_Code_Generation"),
                             self.config.get("run_name", "Qwen_0.5B_RLPRO_Evaluation"),
@@ -408,7 +430,7 @@ class GproTrainer:
         if self.config.get("log_artifacts", True):
             try:
                 _push_to_hub(
-                    self.policy_model,
+                    self.policy_generate_model,
                     self.policy_tokenizer,
                     self.config.get("experiment_name", "RLVR_Code_Generation"),
                     self.config.get("run_name", "Qwen_0.5B_RLPRO_Evaluation"),

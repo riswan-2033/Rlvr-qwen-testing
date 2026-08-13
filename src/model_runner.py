@@ -10,12 +10,12 @@ class LocalLLMRunner:
         self.device = "cuda" 
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        # Use bfloat16 for your Ampere RTX 3060 architecture to preserve stability
+        # FP16 on Turing T4; BF16 requires Ampere+.
+        dtype = torch.float16 if not torch.cuda.is_bf16_supported() else torch.bfloat16
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name, 
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
+            torch_dtype=dtype,
+        ).to(self.device)
 
     def generate_code_solutions(self,  prompts: list,temp: float,max_tokens=526) -> list:
         """Inference sequence optimized for strict single-GPU constraint setups."""
