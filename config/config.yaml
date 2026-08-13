@@ -1,12 +1,12 @@
-experiment_name: "RLVR_Code_Generation"
+experiment_name: "RLRV_Code_Generation"
 run_name: "Qwen_0.5B_RLPRO_Evaluation"
 
-# **Model Options** - keep one policy uncommented
-model_name: "Qwen/Qwen3-4B-Instruct-2507"
+# Model Options - keep one policy uncommented
+model_name: "Qwen/Qwen2.5-Coder-0.5B-Instruct"
 # ref_model_name: "Qwen/Qwen2.5-Coder-0.5B-Instruct"  # frozen reference model
 # alternative_model: "Qwen/Qwen2.5-Coder-1.5B-Instruct"  # alternative policy
 
-# **GPRO Training Parameters**
+# GPRO Training Parameters
 gpro_lr: 1e-5                    # Learning rate for policy optimizer
 gpro_epochs: 10                  # Number of training epochs
 gpro_batch_size: 4               # Mini-batch size for training
@@ -14,29 +14,27 @@ gpro_max_steps: -1               # Max steps (-1 = full epoch over dataset)
 gpro_gae_lambda: 0.95            # GAE lambda for advantage estimation
 gpro_gamma: 0.99                 # GAE gamma discount factor
 
-# **PPO/GPRO Clipping & KL**
+# PPO/GPRO Clipping & KL
 gpro_clip_epsilon: 0.2           # PPO clip epsilon (policy update bound)
 gpro_kl_coefficient: 0.01        # KL divergence coefficient (regularization)
 gpro_kl_target: 0.1              # Target KL divergence for adaptation
 
-# **Rollout & Sampling Parameters**
+# Rollout & Sampling Parameters
 gpro_num_rollouts: 10            # Number of rollout batches per epoch
 gpro_max_new_tokens: 256         # Max new tokens per generation
 gpro_temperature: 0.7            # Sampling temperature
 gpro_top_p: 1.0                  # Top-p nucleus sampling (1.0 = disabled)
 
-# **System & Logging**
-experiment_name: "RLVR_Code_Generation"
-run_name: "Qwen_0.5B_RLPRO_Evaluation"
+# System & Logging
 log_system_states: true          # Log system states during training
 log_artifacts: true              # Log model artifacts/checkpoints
 log_metrics: true                # Log evaluation metrics
 log_traces: true                 # Log execution traces
+temperature: 0.7                 # Sampling temperature for model generation
 
-# **Sandbox Parameters**
+# Sandbox Parameters
 execution_timeout: 2.0
 memory_limit_mb: 256
 
-# **Pipeline Settings**
+# Pipeline Settings
 batch_size: 4
-temperature:0.7
