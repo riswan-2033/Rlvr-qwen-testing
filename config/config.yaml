@@ -39,3 +39,4 @@ memory_limit_mb: 256
 
 # **Pipeline Settings**
 batch_size: 4
+temperature:0.7
