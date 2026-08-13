@@ -40,7 +40,6 @@ def main():
         # Model generation phase
         generated_codes = llm.generate_code_solutions(
             prompts, 
-            max_tokens=config["max_new_tokens"], 
             temp=config["temperature"]
         )
      
@@ -48,11 +47,6 @@ def main():
         for sample_idx, (item, generated_code) in enumerate(zip(batch_items, generated_codes)):
             global_sample_id = i + sample_idx
             
-         
-
-            # ... rest of main() stays the same ...
-
-            # The sandbox is now called via:
             result = evaluate_in_isolation(
                 code_string=generated_code,
                 assertions=item["test_assertions"],

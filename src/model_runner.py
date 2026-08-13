@@ -15,7 +15,7 @@ class LocalLLMRunner:
             device_map="auto"
         )
 
-    def generate_code_solutions(self, prompts: list, max_tokens: int, temp: float) -> list:
+    def generate_code_solutions(self,  prompts: list,temp: float,max_tokens=526) -> list:
         """Inference sequence optimized for strict single-GPU constraint setups."""
         generated_outputs = []
         
