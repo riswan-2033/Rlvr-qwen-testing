@@ -5,7 +5,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 class LocalLLMRunner:
     def __init__(self, model_name: str):
         print(f"-> Allocating VRAM and initializing weights for: {model_name}")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" 
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         # Use bfloat16 for your Ampere RTX 3060 architecture to preserve stability
