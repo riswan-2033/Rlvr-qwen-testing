@@ -1,0 +1,59 @@
+# ===== Core scientific stack =====
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+pillow
+tqdm
+
+# ===== Deep Learning =====
+torch
+torchvision
+torchaudio
+
+# ===== Hugging Face / Transformers ecosystem =====
+transformers
+tokenizers
+datasets
+accelerate
+evaluate
+huggingface-hub
+safetensors
+sentencepiece
+peft
+trl
+diffusers
+timm
+
+# ===== NLP extras =====
+nltk
+sentence-transformers
+scikit-multilearn ; python_version < "3.13"
+
+# ===== Experiment tracking / utils =====
+tensorboard
+wandb
+python-dotenv
+pyyaml
+rich
+ bitsandbytes
+# ===== Notebooks =====
+jupyter
+jupyterlab
+ipywidgets
+ipykernel
+
+torch>=2.3
+transformers>=4.46
+trl>=0.16
+peft>=0.13
+bitsandbytes>=0.43
+accelerate>=1.0
+datasets>=2.20
+mlflow>=2.14
+pyyaml
+pandas
+sentencepiece
+protobuf

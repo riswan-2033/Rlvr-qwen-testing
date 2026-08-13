@@ -1,0 +1,28 @@
+# Hugging Face cache
+.huggingface/**
+
+# MLflow
+mlflow.db
+mlruns/
+
+# Checkpoints
+gpro_checkpoints/
+
+# Hugging Face model cache directories
+hf_cache/**
+
+# Environment files
+.env
+
+# IDE files
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+/pytest_cache_/
+
+# OS
+.DS_Store
