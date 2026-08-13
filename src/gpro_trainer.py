@@ -2,7 +2,6 @@ import re
 import json
 import os
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -110,47 +109,66 @@ class GproDataset(Dataset):
 # Roll-out generator
 # ---------------------------------------------------------------------------
 def rollout(
-    model: AutoModelForCausalLM,
+    models: dict,
     tokenizer,
     prompts: List[str],
     max_new_tokens: int,
     temperature: float,
     top_p: float,
 ) -> Tuple[List[str], List[float], List[float]]:
-    """Returns (generated_codes, values, rewards)."""
-    model.eval()
-    generated_codes = []
-    values = []
-    rewards = []
+    """Returns (generated_codes, values, rewards) using ALL GPUs in parallel.
 
-    with torch.no_grad():
-        for prompt in prompts:
-            inputs = tokenizer(
-                prompt, return_tensors="pt", padding=True, truncation=True
-            ).to(model.device)
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=True,
-                top_p=top_p,
-                pad_token_id=tokenizer.eos_token_id,
-            )
-            raw = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    ``models`` maps ``gpu_id -> model``; prompts are split round-robin across GPUs.
+    """
+    import concurrent.futures
 
-            # Extract last ```python ... ``` block
-            code_blocks = re.findall(r"```python\s*(.*?)```", raw, re.DOTALL)
-            code = code_blocks[-1].strip() if code_blocks else raw.strip()
+    gpu_ids = sorted(models.keys())
+    generated_codes = [None] * len(prompts)
+    values = [0.0] * len(prompts)
+    rewards = [0.0] * len(prompts)
 
-            # Simple reward: 1 if "solution(" appears, else 0
-            reward = 1.0 if "solution(" in code else 0.0
+    chunks = {gpu: [] for gpu in gpu_ids}
+    for idx, prompt in enumerate(prompts):
+        chunks[gpu_ids[idx % len(gpu_ids)]].append((idx, prompt))
 
-            # Dummy value head
-            value = torch.randn(1).item()
+    def run_gpu(gpu):
+        model = models[gpu]
+        model.eval()
+        out = []
+        with torch.no_grad():
+            for idx, prompt in chunks[gpu]:
+                inputs = tokenizer(
+                    prompt, return_tensors="pt", padding=True, truncation=True
+                ).to(f"cuda:{gpu}")
+                output_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=True,
+                    top_p=top_p,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                raw = tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
-            generated_codes.append(code)
-            values.append(value)
-            rewards.append(reward)
+                # Extract last ```python ... ``` block
+                code_blocks = re.findall(r"```python\s*(.*?)```", raw, re.DOTALL)
+                code = code_blocks[-1].strip() if code_blocks else raw.strip()
+
+                # Simple reward: 1 if "solution(" appears, else 0
+                reward = 1.0 if "solution(" in code else 0.0
+
+                # Dummy value head
+                value = torch.randn(1).item()
+
+                out.append((idx, code, value, reward))
+        return out
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
+        for results in pool.map(run_gpu, gpu_ids):
+            for idx, code, value, reward in results:
+                generated_codes[idx] = code
+                values[idx] = value
+                rewards[idx] = reward
 
     return generated_codes, values, rewards
 
@@ -189,31 +207,29 @@ class GproTrainer:
 
         self.config = config
 
-        # --- Policy model (trainable) ---
+        # --- Policy model (trainable): sharded across ALL GPUs via device_map ---
         self.policy_tokenizer = AutoTokenizer.from_pretrained(policy_model_name)
         self.policy_model = AutoModelForCausalLM.from_pretrained(
             policy_model_name,
             torch_dtype=self.compute_dtype,
-        ).to(self.device)
+            device_map="auto",
+        )
         self.policy_model.train()
 
-        # --- Reference model (frozen) ---
+        # --- Reference model (frozen): sharded across ALL GPUs via device_map ---
         self.ref_tokenizer = AutoTokenizer.from_pretrained(ref_model_name)
         self.ref_model = AutoModelForCausalLM.from_pretrained(
             ref_model_name,
             torch_dtype=self.compute_dtype,
-        ).to(self.device)
+            device_map="auto",
+        )
         self.ref_model.eval()
         for p in self.ref_model.parameters():
             p.requires_grad = False
 
-        # --- Replicate training across all GPUs (DataParallel) ---
-        self.policy_generate_model = self.policy_model  # unwrapped model for rollout/gen
+        print(f"[GPU] Policy & ref models sharded across {self.gpu_ids}")
+        self.policy_generate_model = self.policy_model
         self.ref_generate_model = self.ref_model
-        if self.num_gpus > 1:
-            print(f"[GPU] Wrapping policy & ref models with DataParallel on {self.gpu_ids}")
-            self.policy_model = nn.DataParallel(self.policy_model, device_ids=self.gpu_ids)
-            self.ref_model = nn.DataParallel(self.ref_model, device_ids=self.gpu_ids)
 
 # --- Optimizer ---
         gpro_lr = float(self.config.get("gpro_lr", 1e-5))
@@ -322,7 +338,7 @@ class GproTrainer:
                     input_ids, skip_special_tokens=True
                 )
                 codes, values, rewards = rollout(
-                    self.policy_generate_model,
+                    {0: self.policy_generate_model},  # device_map shards across ALL GPUs
                     self.policy_tokenizer,
                     prompts,
                     self.config.get("gpro_max_new_tokens", 256),
@@ -393,15 +409,10 @@ class GproTrainer:
             )
             if epoch % checkpoint_interval == 0 or epoch == epochs:
                 ckpt_path = self.checkpoint_dir / f"epoch_{epoch}.pt"
-                policy_state = (
-                    self.policy_model.module.state_dict()
-                    if isinstance(self.policy_model, nn.DataParallel)
-                    else self.policy_model.state_dict()
-                )
                 torch.save(
                     {
                         "epoch": epoch,
-                        "policy_state_dict": policy_state,
+                        "policy_state_dict": self.policy_model.state_dict(),
                         "optimizer_state_dict": self.optimizer.state_dict(),
                         "loss": avg_loss,
                         "config": self.config,
