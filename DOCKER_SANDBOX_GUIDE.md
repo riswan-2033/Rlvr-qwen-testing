@@ -152,24 +152,17 @@ def execute_in_container(code_string: str, assertions: str, timeout: float, memo
         # Run container
         container = docker_client.containers.run(**container_config)
         
-        # Capture output
-        result = {
-            "status": "PASS",
-            "reward": 1.0,
-            "output": container.decode('utf-8') if isinstance(container, bytes) else container,
-            "error": None
-        }
-        
-        return result
-        
-    except docker.errors.Timeout:
-        return {
-            "status": "TIMEOUT",
-            "reward": 0.0,
-            "error": "Execution exceeded Docker timeout",
-            "output": None
-        }
-    except docker.errors.ContainerError as e:
+    # Capture output
+    result = {
+        "status": "PASS",
+        "reward": 1.0,
+        "output": output.decode('utf-8') if isinstance(output, bytes) else output,
+        "error": None
+    }
+
+    return result
+
+except docker.errors.ContainerError as e:
         error_msg = str(e)
         # Extract stderr if available
         stderr = getattr(e, 'stderr', None)

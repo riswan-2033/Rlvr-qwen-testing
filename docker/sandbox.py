@@ -1,6 +1,7 @@
 import docker
 import json
 import time
+import requests
 from typing import Dict, Any, Optional
 
 # Docker client - connects to local Docker daemon
@@ -39,40 +40,48 @@ def execute_in_container(code_string: str, assertions: str, timeout: float, memo
         full_script = f"{code_string}\n\n{assertions}"
         
         # Create container configuration
+        # (docker SDK >=7: no `cpus`/`timeout` kwargs on run(); no `docker.errors.Timeout`)
         container_config = {
             "image": "python:3.11-slim",
             "command": ["python", "-c", full_script],
-            "remove": True,        # Auto-remove container when it exits
+            "detach": True,          # run detached so we control the timeout
             "network_disabled": True,  # No network access
             "mem_limit": f"{memory_mb}m",
-            "cpus": "0.5",       # Limit to 50% of one CPU
-            "timeout": timeout,  # Docker container timeout
-            "auto_remove": True,
+            "nano_cpus": 500000000,  # Limit to 50% of one CPU
             "privileged": False,
-            "read_only": True,   # Read-only filesystem
-            "pids_limit": 500,   # Limit PID count
+            "read_only": True,       # Read-only filesystem
+            "pids_limit": 500,       # Limit PID count
         }
         
         # Run container
         container = docker_client.containers.run(**container_config)
+        try:
+            container.wait(timeout=timeout)
+        except requests.exceptions.ReadTimeout:
+            try:
+                container.kill()
+            except Exception:
+                pass
+            container.remove(force=True)
+            return {
+                "status": "TIMEOUT",
+                "reward": 0.0,
+                "error": "Execution exceeded Docker timeout",
+                "output": None
+            }
+        output = container.logs(stdout=True, stderr=True)
+        container.remove(force=True)
         
         # Capture output
         result = {
             "status": "PASS",
             "reward": 1.0,
-            "output": container.decode('utf-8') if isinstance(container, bytes) else container,
+            "output": output.decode('utf-8') if isinstance(output, bytes) else output,
             "error": None
         }
         
         return result
         
-    except docker.errors.Timeout:
-        return {
-            "status": "TIMEOUT",
-            "reward": 0.0,
-            "error": "Execution exceeded Docker timeout",
-            "output": None
-        }
     except docker.errors.ContainerError as e:
         error_msg = str(e)
         # Extract stderr if available
