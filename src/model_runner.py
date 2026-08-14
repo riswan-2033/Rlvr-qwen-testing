@@ -1,37 +1,104 @@
+import os
 import re
+import subprocess
 import torch
 import concurrent.futures
 from transformers import AutoTokenizer, AutoModelForCausalLM
+
+
+def _gpu_zombie_report():
+    """Print which PIDs hold GPU memory (leftover processes OOM the fresh replica)."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_gpu_memory", "--format=csv"],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = out.stdout.strip().splitlines()
+        rows = [ln for ln in lines[1:] if ln.strip()]
+        if rows:
+            print("[GPU] Processes currently holding GPU memory:")
+            for ln in rows:
+                print(f"      {ln}")
+            print("      -> If these are leftover runs, kill them (or restart the session) before reloading.")
+        else:
+            print("[GPU] No other processes holding GPU memory - clean.")
+    except Exception as e:
+        print(f"[GPU] (cannot read nvidia-smi: {e})")
+
 
 class LocalLLMRunner:
     def __init__(self, model_name: str):
         print(f"-> Allocating VRAM and initializing weights for: {model_name}")
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA GPU is required. CPU-only computation is not allowed.")
+
+        # Helps avoid CUDA fragmentation OOMs on split-GPU shards/replicas.
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
         self.num_gpus = torch.cuda.device_count()
         self.gpu_ids = list(range(self.num_gpus))
         self.device = f"cuda:{self.gpu_ids[0]}" if self.num_gpus > 0 else "cpu"
-        
+
+        _gpu_zombie_report()  # surface leftover processes BEFORE allocating
+
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         # FP16 on Turing T4; BF16 requires Ampere+.
         dtype = torch.float16 if not torch.cuda.is_bf16_supported() else torch.bfloat16
         self.fp_dtype = dtype
 
         # Load one full model copy per GPU so generation uses every GPU in parallel.
+        # `low_cpu_mem_usage` + a per-GPU device_map loads the shard DIRECTLY onto
+        # the target GPU, avoiding a full CPU-RAM materialization + copy (the OOM
+        # + 30GB-RAM symptom you saw).
         self.models = {}
         for gpu in self.gpu_ids:
-            print(f"[GPU {gpu}] Loading model replica on cuda:{gpu}")
-            self.models[gpu] = AutoModelForCausalLM.from_pretrained(
-                model_name, torch_dtype=dtype
-            ).to(f"cuda:{gpu}")
+            print(f"[GPU {gpu}] Loading model replica directly on cuda:{gpu}")
+            try:
+                self.models[gpu] = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    dtype=dtype,
+                    device_map={"": f"cuda:{gpu}"},
+                    low_cpu_mem_usage=True,
+                )
+            except torch.cuda.OutOfMemoryError as exc:
+                free_b, total_b = torch.cuda.mem_get_info(gpu)
+                print(
+                    f"[GPU {gpu}] CUDA out of memory while loading replica "
+                    f"(free {free_b/2**30:.2f} GiB / {total_b/2**30:.2f} GiB)."
+                )
+                _gpu_zombie_report()
+                raise RuntimeError(
+                    "GPU memory exhausted while loading a model replica. A previous "
+                    "run/notebook is probably still holding VRAM. Kill leftover "
+                    "processes (see nvidia-smi) or restart the Kaggle session, then retry."
+                ) from exc
+            free_b, _ = torch.cuda.mem_get_info(gpu)
+            print(f"[GPU {gpu}] Replica ready, free {free_b/2**30:.2f} GiB on cuda:{gpu}")
         self.model = self.models[self.gpu_ids[0]]
+
+        # Warm-up: force CUDA kernels for every replica (streams stay busy on both GPUs).
+        for gpu in self.gpu_ids:
+            x = torch.zeros((1, 2), dtype=torch.long, device=self.devices(gpu))
+            try:
+                with torch.no_grad():
+                    self.models[gpu](x)
+            except Exception:
+                pass
+        torch.cuda.empty_cache()
+
+    @staticmethod
+    def devices(gpu: int) -> str:
+        return f"cuda:{gpu}"
 
     def _generate_single_gpu(self, gpu: int, prompts: list, temp: float, max_tokens: int) -> list:
         model = self.models[gpu]
+        device = self.devices(gpu)
         generated = []
         with torch.no_grad():
             for prompt in prompts:
-                inputs = self.tokenizer(prompt, return_tensors="pt").to(f"cuda:{gpu}")
+                inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
                 output_tokens = model.generate(
                     **inputs,
                     max_new_tokens=max_tokens,
