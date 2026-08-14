@@ -1,10 +1,10 @@
 experiment_name: "RLRV_Code_Generation"
-run_name: "Qwen_4b_Evaluation"
+run_name: "Qwen_4b_code-Evaluation"
 
 # **Model Options** - Default: Qwen3-4B-Instruct-2507 (4B model)
 # The 4B model is the default. 3B / 0.5B / 2B are commented out / retired.
-model_name: "Qwen3-4B-Instruct-2507"
-ref_model_name: "Qwen3-4B-Instruct-2507"
+model_name: "Qwen/Qwen3-4B-Instruct-2507"
+ref_model_name: "Qwen/Qwen3-4B-Instruct-2507"
 # model_name: "Qwen/Qwen2.5-3B-Instruct"       # retired
 # ref_model_name: "Qwen/Qwen2.5-3B-Instruct"   # retired
 
