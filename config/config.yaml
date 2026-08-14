@@ -2,14 +2,32 @@ experiment_name: "RLRV_Code_Generation"
 run_name: "Qwen_4b_Evaluation"
 
 # **Model Options** - Default: Qwen3-4B-Instruct-2507 (4B model)
-# To use the 0.5B model instead, change to: "Qwen/Qwen2.5-Coder-0.5B-Instruct"
-# model_name: "Qwen3-4B-Instruct-2507"
-model_name: "Qwen/Qwen2.5-3B-Instruct"
-ref_model_name: "Qwen/Qwen2.5-3B-Instruct"
-# Added missing space after colon
-# alternative_model: "Qwen/Qwen2.5-Coder-1.5B-Instruct"  # alternative policy
+# The 4B model is the default. 3B / 0.5B / 2B are commented out / retired.
+model_name: "Qwen3-4B-Instruct-2507"
+ref_model_name: "Qwen3-4B-Instruct-2507"
+# model_name: "Qwen/Qwen2.5-3B-Instruct"       # retired
+# ref_model_name: "Qwen/Qwen2.5-3B-Instruct"   # retired
 
-# GPRO Training Parameters
+# =============================================================================
+# KAGGLE RLVR PIPELINE (self-contained in kaggle/)
+# =============================================================================
+
+# --- Dataset selection (code-checking, not math) ---
+# Choose one by uncommenting its block. Only ONE must be active.
+dataset_name: "mbpp"          # mbpp: Mostly Basic Python Problems
+dataset_split: "test"         # mbpp: train / validation / test
+dataset_cache_dir: "kaggle_hf_cache/datasets"
+dataset_sample_limit: 50      # how many problems to load (None = full split)
+
+# HumanEval option:
+# dataset_name: "humaneval"
+# dataset_split: "test"
+
+# --- Model caching ---
+model_cache_dir: "kaggle_hf_cache/models"
+use_symlink_cache: false
+
+# --- GPRO Training Parameters ---
 gpro_lr: 1e-5                    # Learning rate for policy optimizer
 gpro_epochs: 10                  # Number of training epochs
 gpro_batch_size: 4               # Mini-batch size for training
@@ -24,20 +42,31 @@ gpro_kl_target: 0.1              # Target KL divergence for adaptation
 
 # Rollout & Sampling Parameters
 gpro_num_rollouts: 10            # Number of rollout batches per epoch
+gpro_num_samples_per_prompt: 4   # rollout samples generated per prompt (group)
 gpro_max_new_tokens: 256         # Max new tokens per generation
 gpro_temperature: 0.7            # Sampling temperature
 gpro_top_p: 1.0                  # Top-p nucleus sampling (1.0 = disabled)
+gpro_normalize_advantages: true  # group-mean/std baseline for advantages
 
-# System & Logging
+# --- Code Sandbox (DOCKER ONLY - REQUIRED on Kaggle) ---
+sandbox_image: "python:3.11-slim"
+execution_timeout: 5.0        # seconds max per code execution
+memory_limit_mb: 512
+cpu_limit: "0.5"              # 50% of one CPU core
+network_disabled: true
+read_only_fs: true
+
+# --- Checkpoints / Logging ---
+checkpoint_dir: "kaggle_checkpoints"
+checkpoint_interval: 1
 log_system_states: true          # Log system states during training
-log_artifacts: true              # Log model artifacts/checkpoints
+log_artifacts: true              # Push trained model to HF Hub at checkpoints
 log_metrics: true                # Log evaluation metrics
 log_traces: true                 # Log execution traces
+log_to_mlflow: true              # Log everything (rollouts, prompts, system) to MLflow
+mlflow_tracking_uri: ""          # optional: file:///kaggle/working/mlruns ("" = default)
+hf_token_env: "HF_TOKEN"
 temperature: 0.7                 # Sampling temperature for model generation
-
-# Sandbox Parameters
-execution_timeout: 2.0
-memory_limit_mb: 256
 
 # Pipeline Settings
 batch_size: 4

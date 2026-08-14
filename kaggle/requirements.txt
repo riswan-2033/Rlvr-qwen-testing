@@ -1,0 +1,15 @@
+# Kaggle RLVR - Python
+torch>=2.3
+transformers>=4.46
+datasets>=2.20
+accelerate>=1.0
+huggingface_hub>=0.24
+safetensors
+sentencepiece
+protobuf
+pyyaml
+docker>=6.0
+mlflow>=2.14
+psutil
+nvidia-ml-py
+cloudpickle
