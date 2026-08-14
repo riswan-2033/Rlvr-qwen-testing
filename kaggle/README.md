@@ -79,14 +79,19 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 ## Quick start (Kaggle notebook)
 
+> ⚠️ Never `from main import run` while the working dir is the **repo root** —
+> that imports the root `main.py` (which has no `run`). Always `os.chdir` into
+> the `kaggle/` folder first, or load by absolute path (see DOCKER_SETUP doc).
+
 ```python
-import os
-os.chdir("../kaggle")            # move into this folder
+import os, sys
+os.chdir("../kaggle")            # MUST move into this folder (repo root has its own main.py)
+sys.path.insert(0, ".")
 !pip install -q -r requirements.txt
 !curl -fsSL https://get.docker.com | sh        # bootstrap docker daemon
 !docker pull python:3.11-slim
-from main import run
-run(epochs=10, samples=50)       # auto-loads ../config/config.yaml
+import main                       # now resolves to ./kaggle/main.py
+main.run(epochs=10, samples=50)   # auto-loads ../config/config.yaml
 ```
 
 ## Configuration highlights (`config/config.yaml`)

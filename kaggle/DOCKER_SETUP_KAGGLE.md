@@ -166,37 +166,66 @@ helpers are present. `sshpass` + `ssh -o` options may be needed for automation.
 
 Kaggle kernels are themselves containers, so a nested daemon only works when the
 kernel grants the needed privileges (root perms + `--privileged`-like caps).
-Try it as a fallback:
+Try it as a fallback. **Important:** Kaggle's `!` shell does NOT allow
+background processes (`&`) — it raises `OSError: Background processes not
+supported`. Always start `dockerd` with Python's `subprocess.Popen` instead:
 
 ```python
 !apt-get update && apt-get install -y docker.io
 
-# start dockerd in the background (needs root; may fail on locked-down kernels)
-!nohup dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs \
-    --iptables=false --bridge=none > /tmp/dockerd.log 2>&1 &
-import time, docker
-for _ in range(15):
+# start dockerd in the background via subprocess.Popen (works in Kaggle)
+import subprocess, time, os
+
+dockerd = subprocess.Popen(
+    ["dockerd",
+     "--host=unix:///var/run/docker.sock",
+     "--storage-driver=vfs",
+     "--iptables=false",
+     "--bridge=none"],
+    stdout=open("/tmp/dockerd.log", "w"),
+    stderr=subprocess.STDOUT,
+    start_new_session=True,   # detach so it keeps running
+)
+
+import docker
+for _ in range(20):
     try:
         c = docker.from_env(); c.version(); print("DinD OK"); break
     except Exception:
         time.sleep(3)
+else:
+    print("!! dockerd failed to start - see /tmp/dockerd.log")
 ```
 
-If `dockerd` won't start (permission denied on cgroups/mounts), **use Option A**.
+Diagnose failures with `subprocess.run(["cat", "/tmp/dockerd.log"])`
+(or `!cat /tmp/dockerd.log`). Common blockers: no privileges/root, no cgroups or
+mounts namespaces — if `dockerd` can't start, **use Option A**.
+
+If you are on a Linux VM / Colab-style host that *does* allow `&`, the plain
+shell form is:
+
+```bash
+dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs \
+  --iptables=false --bridge=none > /tmp/dockerd.log 2>&1 &
+```
 
 ---
 
 ## 7. Verify the connection before training
 
 `get_client()` (`src/sandbox.py`) already validates the daemon and raises a clear
-error if unreachable. Run the built-in self-test:
+error if unreachable. Run the built-in self-test.
+**Important:** never `from main import run` from the repo root — import `src`
+modules only after `os.chdir` into the kaggle folder (or add `kaggle/` first on
+`sys.path` and use `import main` / sandbox by absolute path):
 
 ```python
 import sys, os
-sys.path.insert(0, "/kaggle/working/kaggle")   # wherever you cloned the repo
+kaggle_dir = "/kaggle/working/Rlvr-qwen-testing/kaggle"   # adjust to your clone
+sys.path.insert(0, kaggle_dir)      # kaggle dir FIRST so it wins over repo root
+os.chdir(kaggle_dir)                # also cd in, so relative paths match
 
-from main import run
-# ---- OR just test the sandbox ----
+# just test the sandbox
 from src.sandbox import get_client, evaluate_in_isolation
 get_client()
 print(evaluate_in_isolation(
@@ -204,6 +233,10 @@ print(evaluate_in_isolation(
     tests=["assert solution(1,2)==3", "assert solution(2,3)==5"],
 ))
 # expected: {'status': 'PASS', 'reward': 1.0, 'passed': 2, 'total': 2, ...}
+
+# or run the full pipeline entry point
+import main
+main.run(epochs=1, samples=2)
 ```
 
 You must see the verdict, otherwise the trainer will fail at the first rollout.
@@ -240,19 +273,34 @@ os.environ["DOCKER_TLS_VERIFY"] = "1"
 !cd Rlvr-qwen-testing/kaggle && python main.py --epochs 10 --samples 50
 ```
 
-Or in Python cells:
+Or in Python cells (note: do NOT `from main import run` while cwd is the repo
+root — that imports the root `main.py` which has no `run`. `os.chdir` into the
+kaggle folder first):
 
 ```python
 import os, sys
-os.chdir("/kaggle/working/Rlvr-qwen-testing/kaggle")
+os.chdir("/kaggle/working/Rlvr-qwen-testing/kaggle")   # MUST cd into kaggle/
 sys.path.insert(0, ".")
 os.environ["DOCKER_HOST"] = "tcp://<REMOTE_IP>:2376"
 os.environ["DOCKER_TLS_VERIFY"] = "1"
-from main import run
-run(epochs=10, samples=50)
+import main                      # now imports ./kaggle/main.py (has run())
+main.run(epochs=10, samples=50)
 
 # or in a browser once done (Kaggle cell):
 !mlflow ui --backend-store-uri sqlite:///mlflow.db --host 0.0.0.0
+```
+
+Alternatively, load by absolute path so the repo-root `main.py` can never shadow:
+
+```python
+import importlib.util, os
+spec = importlib.util.spec_from_file_location(
+    "kaggle_main",
+    "/kaggle/working/Rlvr-qwen-testing/kaggle/main.py",
+)
+km = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(km)          # km.run(...) -> the kaggle entry point
+km.run(epochs=10, samples=50)
 ```
 
 ## 9b. What MLflow shows after completion
