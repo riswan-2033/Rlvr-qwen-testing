@@ -16,7 +16,8 @@
 import base64
 import json
 import docker
-from typing import Dict, Any, List, Optional
+import requests
+from typing import Dict, Any, List, Optional, Tuple
 
 
 def get_client() -> docker.DockerClient:
@@ -79,28 +80,52 @@ def _run_container(
     network_disabled: bool,
     read_only_fs: bool,
 ) -> bytes:
-    """Run script in a fresh container; returns stdout bytes."""
+    """Run script in a fresh container; returns stdout bytes.
+
+    docker SDK >=7.0 changed the API surface:
+      * ``cpus`` is not a valid ``containers.run()`` kwarg -> use ``nano_cpus``.
+      * ``timeout`` is not a valid ``containers.run()`` kwarg -> run detached
+        and wait with an explicit timeout, killing the container on expiry.
+      * ``docker.errors.Timeout`` was removed -> catch
+        ``requests.exceptions.ReadTimeout`` instead.
+    """
     encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
     command = [
         "python",
         "-c",
         "import base64; exec(base64.b64decode('" + encoded + "').decode('utf-8'))",
     ]
-    return client.containers.run(
+    container = client.containers.run(
         image=image,
         command=command,
         mem_limit=f"{memory_mb}m",
-        cpus=cpu_limit,
+        nano_cpus=int(float(cpu_limit) * 1e9),
         network_disabled=network_disabled,
         read_only=read_only_fs,
         pids_limit=128,
-        auto_remove=True,
-        detach=False,
+        detach=True,
         stdout=True,
         stderr=True,
-        timeout=timeout,
         tty=False,
     )
+    try:
+        container.wait(timeout=timeout)
+    except requests.exceptions.ReadTimeout:
+        try:
+            container.kill()
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+        container.remove(force=True)
+        raise SandboxTimeoutError(
+            f"Execution exceeded Docker timeout of {timeout}s"
+        )
+    output = container.logs(stdout=True, stderr=True)
+    container.remove(force=True)
+    return output
+
+
+class SandboxTimeoutError(Exception):
+    """Raised when a sandbox container exceeds its execution timeout."""
 
 
 def evaluate_in_isolation(
@@ -156,7 +181,7 @@ def evaluate_in_isolation(
             "output": text[:2000],
         }
 
-    except docker.errors.Timeout:
+    except SandboxTimeoutError:
         return {
             "status": "TIMEOUT",
             "reward": 0.0,
