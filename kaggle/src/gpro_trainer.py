@@ -52,10 +52,13 @@ class GproTrainer:
         self.ref_tokenizer = AutoTokenizer.from_pretrained(ref_model_name, cache_dir=cache_dir)
         if self.ref_tokenizer.pad_token is None:
             self.ref_tokenizer.pad_token = self.ref_tokenizer.eos_token
+        from .gpu_utils import build_multi_gpu_device_map
+
+        ref_device_map = build_multi_gpu_device_map(ref_model_name, cache_dir=cache_dir)
         self.ref_model = AutoModelForCausalLM.from_pretrained(
             ref_model_name,
             torch_dtype=self.compute_dtype,
-            device_map="auto",
+            device_map=ref_device_map,
             cache_dir=cache_dir,
         )
         self.ref_model.eval()

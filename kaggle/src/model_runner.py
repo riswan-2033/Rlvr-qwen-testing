@@ -1,10 +1,9 @@
 # =============================================================================
 # Policy model rollout generation (Kaggle edition)
 #
-# The policy model is loaded with `device_map="auto"` so weights are SHARDED
-# across every available GPU (2x T4 on Kaggle). `model.generate` then runs on
-# both GPUs at once; a small thread pool also fans prompts across batches to
-# keep both GPUs busy during rollout.
+# The policy model is loaded with an EXPLICIT round-robin `device_map` (see
+# `gpu_utils.build_multi_gpu_device_map`) so the layer stack is sharded across
+# EVERY available GPU (2x T4 on Kaggle) - never parked on a single GPU.
 # =============================================================================
 import torch
 import re
@@ -36,10 +35,13 @@ class LocalLLMRunner:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        from .gpu_utils import build_multi_gpu_device_map
+
+        device_map = build_multi_gpu_device_map(model_name, cache_dir=cache_dir)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=self.compute_dtype,
-            device_map="auto",
+            device_map=device_map,
             cache_dir=cache_dir,
         )
         self.model.eval()
